@@ -1,0 +1,22 @@
+{
+  "kinesis_stream_name": "stock-prices-stream",
+  "dynamodb_table_name": "stock-analytics",
+  "aws_region": "us-east-1",
+  "enforce_market_hours": true,
+  "test_mode": false,
+  "data_retention_days": 7,
+  "analytics": {
+    "time_windows_minutes": [1, 5, 15, 30, 60, 120],
+    "moving_average_windows_minutes": [5, 15, 30, 60],
+    "volatility_threshold": 0.02,
+    "momentum_threshold": 0.015
+  },
+  "shutdown": {
+    "no_data_timeout_minutes": 10,
+    "check_interval_minutes": 5
+  },
+  "batch": {
+    "write_interval_minutes": 15,
+    "max_size": 500
+  }
+}
