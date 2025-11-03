@@ -140,3 +140,6 @@ configs/.env
 # Local test data
 test_data/
 *.local.json
+
+# Claude Code local settings (but keep custom commands)
+.claude/settings.local.json
