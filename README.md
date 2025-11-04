@@ -181,28 +181,54 @@ Edit `configs/config.example.json`:
 
 ### Output (to DynamoDB)
 
+Every stock record is enriched with **40-66 fields** of comprehensive analytics:
+
 ```json
 {
   "symbol": "AAPL",
   "timestamp": "2025-11-03T17:19:39.193597",
   "date": "2025-11-03",
   "current_price": 268.04,
+
+  "change": -2.33,
+  "change_percent": "-0.86",
+  "high": 270.85,
+  "low": 266.25,
+  "open": 269.7,
+  "previous_close": 270.37,
+
   "intraday_change_from_open": -1.66,
   "intraday_change_from_open_percent": -0.62,
   "gap": -0.67,
   "gap_percent": -0.25,
   "gap_type": "gap_down",
+
   "change_5min": 1.04,
   "change_5min_percent": 0.39,
+  "high_5min": 268.50,
+  "low_5min": 267.00,
+  "range_5min": 1.50,
+  "volume_5min": 12,
+
+  "change_15min": 1.54,
+  "change_15min_percent": 0.58,
   "ma_5min": 267.51,
   "ma_15min": 267.25,
+  "ma_30min": 268.10,
+  "ma_60min": 268.50,
+
   "volatility": 0.0123,
+  "volatility_annualized": 0.1953,
   "momentum": 0.0089,
+  "price_acceleration": 0.0012,
+
   "trading_signal": "HOLD",
   "signal_reason": "Stable price action within normal parameters",
   "ttl": 1730923179
 }
 ```
+
+**See [DynamoDB Schema Documentation](docs/DYNAMODB_SCHEMA.md) for complete field list.**
 
 ## Batch Write Management
 

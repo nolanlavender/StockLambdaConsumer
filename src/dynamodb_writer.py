@@ -56,10 +56,17 @@ class DynamoDBWriter:
             # Write to DynamoDB
             self.table.put_item(Item=item)
 
-            logger.debug(
-                f"Wrote analytics for {analytics.get('symbol')} at "
-                f"{analytics.get('timestamp')} to DynamoDB"
+            # Log summary of what was written
+            field_count = len(item)
+            logger.info(
+                f"Wrote {field_count} fields to DynamoDB for {analytics.get('symbol')} at "
+                f"{analytics.get('timestamp')} - "
+                f"Signal: {analytics.get('trading_signal')}, "
+                f"Momentum: {analytics.get('momentum', 0):.4f}, "
+                f"Volatility: {analytics.get('volatility', 0):.4f}"
             )
+
+            logger.debug(f"Fields written: {', '.join(sorted(item.keys()))}")
 
             return True
 
@@ -91,6 +98,9 @@ class DynamoDBWriter:
             (datetime.now() + timedelta(days=self.retention_days)).timestamp()
         )
 
+        # Track field counts for logging
+        total_fields = 0
+
         try:
             # DynamoDB batch write can handle up to 25 items at a time
             with self.table.batch_writer() as batch:
@@ -100,15 +110,18 @@ class DynamoDBWriter:
                         item['ttl'] = ttl_timestamp
                         batch.put_item(Item=item)
                         success_count += 1
+                        total_fields += len(item)
                     except Exception as e:
                         logger.error(
                             f"Error preparing item for batch write: {e}"
                         )
                         failed_count += 1
 
+            avg_fields = total_fields / success_count if success_count > 0 else 0
             logger.info(
-                f"Batch write completed: {success_count} success, "
-                f"{failed_count} failed"
+                f"Batch write completed: {success_count} records written, "
+                f"{failed_count} failed, "
+                f"avg {avg_fields:.0f} fields per record"
             )
 
         except ClientError as e:
