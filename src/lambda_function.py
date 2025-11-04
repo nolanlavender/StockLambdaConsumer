@@ -126,7 +126,7 @@ def load_time_window_data(symbol: str) -> Dict[int, List[Dict[str, Any]]]:
         data = historical_loader.get_time_window_data(symbol, window_minutes)
         time_window_data[window_minutes] = data
 
-        logger.debug(
+        logger.info(
             f"Loaded {len(data)} data points for {symbol} "
             f"{window_minutes}min window"
         )

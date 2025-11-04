@@ -43,13 +43,13 @@ class HistoricalDataLoader:
             Dictionary with previous day's summary or None if not found
         """
         # Check cache first
-        cache_key = f"{symbol}:{reference_date or datetime.now().date()}"
+        cache_key = f"{symbol}:{reference_date or datetime.utcnow().date()}"
         if cache_key in self._cache:
             logger.debug(f"Returning cached data for {cache_key}")
             return self._cache[cache_key]
 
         if reference_date is None:
-            reference_date = datetime.now()
+            reference_date = datetime.utcnow()
 
         # Get previous day (simple approach - actual implementation should skip weekends/holidays)
         previous_date = reference_date - timedelta(days=1)
@@ -98,7 +98,7 @@ class HistoricalDataLoader:
             List of stock records within the time window
         """
         if reference_time is None:
-            reference_time = datetime.now()
+            reference_time = datetime.utcnow()
 
         start_time = reference_time - timedelta(minutes=window_minutes)
         start_timestamp = start_time.isoformat()
