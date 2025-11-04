@@ -34,6 +34,36 @@ KINESIS_STREAM_ARN="${KINESIS_STREAM_ARN}"
 if [ -z "$KINESIS_STREAM_NAME" ] || [ -z "$KINESIS_STREAM_ARN" ]; then
     echo -e "${YELLOW}Fetching Kinesis stream info from producer stack...${NC}"
 
+    # Check if producer stack exists
+    STACK_STATUS=$(aws cloudformation describe-stacks \
+        --stack-name "$PRODUCER_STACK_NAME" \
+        --query "Stacks[0].StackStatus" \
+        --output text \
+        --region "$AWS_REGION" 2>/dev/null || echo "NOT_FOUND")
+
+    if [ "$STACK_STATUS" = "NOT_FOUND" ]; then
+        echo -e "${RED}Error: Producer stack '${PRODUCER_STACK_NAME}' not found${NC}"
+        echo ""
+        echo -e "${YELLOW}Please do ONE of the following:${NC}"
+        echo ""
+        echo "1. Deploy the producer stack first:"
+        echo "   cd ../StockLambdaProducer"
+        echo "   export FINNHUB_API_KEY=your-api-key"
+        echo "   ./scripts/deploy.sh"
+        echo "   cd ../StockLambdaConsumer"
+        echo "   ./scripts/deploy.sh"
+        echo ""
+        echo "2. OR manually set the Kinesis stream information:"
+        echo "   export KINESIS_STREAM_NAME=stock-prices-stream"
+        echo "   export KINESIS_STREAM_ARN=arn:aws:kinesis:${AWS_REGION}:ACCOUNT_ID:stream/stock-prices-stream"
+        echo "   ./scripts/deploy.sh"
+        echo ""
+        echo "3. OR specify a different producer stack name:"
+        echo "   export PRODUCER_STACK_NAME=my-producer-stack"
+        echo "   ./scripts/deploy.sh"
+        exit 1
+    fi
+
     KINESIS_STREAM_NAME=$(aws cloudformation describe-stacks \
         --stack-name "$PRODUCER_STACK_NAME" \
         --query "Stacks[0].Outputs[?OutputKey=='KinesisStreamName'].OutputValue" \
@@ -45,6 +75,23 @@ if [ -z "$KINESIS_STREAM_NAME" ] || [ -z "$KINESIS_STREAM_ARN" ]; then
         --query "Stacks[0].Outputs[?OutputKey=='KinesisStreamArn'].OutputValue" \
         --output text \
         --region "$AWS_REGION" 2>/dev/null || echo "")
+
+    # Check if outputs were found
+    if [ -z "$KINESIS_STREAM_NAME" ] || [ "$KINESIS_STREAM_NAME" = "None" ]; then
+        echo -e "${RED}Error: Producer stack exists but has no KinesisStreamName output${NC}"
+        echo ""
+        echo "Available outputs from producer stack:"
+        aws cloudformation describe-stacks \
+            --stack-name "$PRODUCER_STACK_NAME" \
+            --query "Stacks[0].Outputs[*].[OutputKey,OutputValue]" \
+            --output table \
+            --region "$AWS_REGION"
+        echo ""
+        echo "Please manually set the Kinesis stream information:"
+        echo "  export KINESIS_STREAM_NAME=stock-prices-stream"
+        echo "  export KINESIS_STREAM_ARN=arn:aws:kinesis:${AWS_REGION}:ACCOUNT_ID:stream/stock-prices-stream"
+        exit 1
+    fi
 fi
 
 # Validate required parameters
@@ -54,7 +101,7 @@ if [ -z "$KINESIS_STREAM_NAME" ] || [ -z "$KINESIS_STREAM_ARN" ]; then
     echo ""
     echo "Example:"
     echo "  export KINESIS_STREAM_NAME=stock-prices-stream"
-    echo "  export KINESIS_STREAM_ARN=arn:aws:kinesis:us-east-1:123456789:stream/stock-prices-stream"
+    echo "  export KINESIS_STREAM_ARN=arn:aws:kinesis:${AWS_REGION}:ACCOUNT_ID:stream/stock-prices-stream"
     exit 1
 fi
 
