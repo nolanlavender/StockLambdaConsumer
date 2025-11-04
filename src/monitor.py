@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 import boto3
 from botocore.exceptions import ClientError
 
-from config import get_config
+from config import get_config, Config
 from market_hours import MarketHours
 from dynamodb_writer import DynamoDBWriter
 
@@ -17,10 +17,10 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # Global instances
-config = None
-market_hours = None
-lambda_client = None
-dynamodb_writer = None
+config: Optional[Config] = None
+market_hours: Optional[MarketHours] = None
+lambda_client: Optional[Any] = None
+dynamodb_writer: Optional[DynamoDBWriter] = None
 
 
 def initialize():
@@ -57,6 +57,10 @@ def get_event_source_mapping_state(event_source_uuid: str) -> Optional[Dict[str,
     Returns:
         Event source mapping info or None
     """
+    if lambda_client is None:
+        logger.error("Lambda client not initialized")
+        return None
+
     try:
         response = lambda_client.get_event_source_mapping(
             UUID=event_source_uuid
@@ -78,6 +82,10 @@ def update_event_source_mapping(event_source_uuid: str, enabled: bool) -> bool:
     Returns:
         True if successful, False otherwise
     """
+    if lambda_client is None:
+        logger.error("Lambda client not initialized")
+        return False
+
     try:
         response = lambda_client.update_event_source_mapping(
             UUID=event_source_uuid,
@@ -102,6 +110,10 @@ def check_last_data_update() -> Optional[datetime]:
     Returns:
         datetime of last update or None if no data found
     """
+    if dynamodb_writer is None:
+        logger.error("DynamoDB writer not initialized")
+        return None
+
     try:
         last_update = dynamodb_writer.get_last_update_time()
         return last_update
@@ -117,6 +129,10 @@ def should_disable_consumer() -> tuple[bool, str]:
     Returns:
         Tuple of (should_disable: bool, reason: str)
     """
+    if config is None or market_hours is None:
+        logger.error("Config or market_hours not initialized")
+        return False, "Not initialized"
+
     # Check market hours (if enforced and not in test mode)
     if config.enforce_market_hours and not config.test_mode:
         is_open, reason = market_hours.is_market_open()
@@ -154,6 +170,10 @@ def should_enable_consumer() -> tuple[bool, str]:
     Returns:
         Tuple of (should_enable: bool, reason: str)
     """
+    if config is None or market_hours is None:
+        logger.error("Config or market_hours not initialized")
+        return False, "Not initialized"
+
     # Only enable during market hours (if enforced and not in test mode)
     if config.enforce_market_hours and not config.test_mode:
         is_open, reason = market_hours.is_market_open()
@@ -169,13 +189,13 @@ def should_enable_consumer() -> tuple[bool, str]:
     return True, "Market hours enforcement disabled - enabling consumer"
 
 
-def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+def lambda_handler(_event: Dict[str, Any], _context: Any) -> Dict[str, Any]:
     """
     Lambda handler for monitoring and auto-shutdown.
 
     Args:
-        event: EventBridge event
-        context: Lambda context
+        _event: EventBridge event (unused)
+        _context: Lambda context (unused)
 
     Returns:
         Response dictionary
