@@ -22,8 +22,8 @@ echo ""
 aws dynamodb query \
     --table-name "${TABLE_NAME}" \
     --key-condition-expression "symbol = :symbol" \
-    --expression-attribute-values "{\":symbol\":{\"S\":\"${SYMBOL}\"}}" \
-    --scan-index-forward false \
+    --expression-attribute-values '{":symbol":{"S":"'"${SYMBOL}"'"}}' \
+    --no-scan-index-forward \
     --limit "${LIMIT}" \
     --region "${AWS_REGION}" \
     --output table
