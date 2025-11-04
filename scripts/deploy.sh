@@ -125,40 +125,54 @@ echo "  Kinesis Stream: ${KINESIS_STREAM_NAME}"
 echo "  Kinesis ARN: ${KINESIS_STREAM_ARN}"
 echo ""
 
+# Validate parameters one more time before deploy
+echo -e "${GREEN}Validating parameters...${NC}"
+if [ -z "$KINESIS_STREAM_ARN" ] || [ "$KINESIS_STREAM_ARN" = "None" ]; then
+    echo -e "${RED}Error: KINESIS_STREAM_ARN is empty or None${NC}"
+    echo "Current value: '${KINESIS_STREAM_ARN}'"
+    exit 1
+fi
+
+echo "  Kinesis Stream ARN: ${KINESIS_STREAM_ARN}"
+echo "  Kinesis Stream Name: ${KINESIS_STREAM_NAME}"
+echo ""
+
 # Build the application
 echo -e "${GREEN}Building SAM application...${NC}"
-sam build
+sam build --use-container 2>/dev/null || sam build
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}Build failed!${NC}"
     exit 1
 fi
 
-# Deploy parameters
-PARAMETERS=(
-    "KinesisStreamName=${KINESIS_STREAM_NAME}"
-    "KinesisStreamArn=${KINESIS_STREAM_ARN}"
-    "DynamoDBTableName=${DYNAMODB_TABLE_NAME:-stock-analytics}"
-    "DataRetentionDays=${DATA_RETENTION_DAYS:-7}"
-    "EnforceMarketHours=${ENFORCE_MARKET_HOURS:-true}"
-    "TestMode=${TEST_MODE:-false}"
-    "NoDataTimeoutMinutes=${NO_DATA_TIMEOUT_MINUTES:-10}"
-    "CheckIntervalMinutes=${CHECK_INTERVAL_MINUTES:-5}"
-)
-
-PARAM_OVERRIDES=$(IFS=, ; echo "${PARAMETERS[*]}")
+echo -e "${GREEN}Build successful!${NC}"
+echo ""
 
 # Deploy the application
 echo -e "${GREEN}Deploying SAM application...${NC}"
+echo "This may take several minutes..."
+echo ""
+
 sam deploy \
     --stack-name "${STACK_NAME}" \
     --s3-bucket "${S3_BUCKET}" \
     --capabilities CAPABILITY_IAM \
     --region "${AWS_REGION}" \
-    --parameter-overrides ${PARAM_OVERRIDES} \
-    --no-fail-on-empty-changeset
+    --no-fail-on-empty-changeset \
+    --parameter-overrides \
+        KinesisStreamName="${KINESIS_STREAM_NAME}" \
+        KinesisStreamArn="${KINESIS_STREAM_ARN}" \
+        DynamoDBTableName="${DYNAMODB_TABLE_NAME:-stock-analytics}" \
+        DataRetentionDays="${DATA_RETENTION_DAYS:-7}" \
+        EnforceMarketHours="${ENFORCE_MARKET_HOURS:-true}" \
+        TestMode="${TEST_MODE:-false}" \
+        NoDataTimeoutMinutes="${NO_DATA_TIMEOUT_MINUTES:-10}" \
+        CheckIntervalMinutes="${CHECK_INTERVAL_MINUTES:-5}"
 
-if [ $? -eq 0 ]; then
+DEPLOY_EXIT_CODE=$?
+
+if [ $DEPLOY_EXIT_CODE -eq 0 ]; then
     echo ""
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}Deployment successful!${NC}"
@@ -175,11 +189,34 @@ if [ $? -eq 0 ]; then
 
     echo ""
     echo -e "${GREEN}Next steps:${NC}"
-    echo "  1. Monitor CloudWatch Logs for function execution"
-    echo "  2. Check DynamoDB table for analytics data"
-    echo "  3. View Kinesis event source mapping status"
+    echo "  1. Monitor CloudWatch Logs: ./scripts/monitor_logs.sh processor"
+    echo "  2. Check DynamoDB table: ./scripts/query_analytics.sh AAPL 10"
+    echo "  3. View logs: aws logs tail /aws/lambda/stock-lambda-consumer-StockAnalyticsProcessor --follow"
+    echo ""
+    echo -e "${GREEN}Deployment complete! Consumer is now processing data from Kinesis.${NC}"
     echo ""
 else
+    echo ""
+    echo -e "${RED}========================================${NC}"
     echo -e "${RED}Deployment failed!${NC}"
+    echo -e "${RED}========================================${NC}"
+    echo ""
+    echo -e "${YELLOW}Troubleshooting:${NC}"
+    echo ""
+    echo "1. Check the error message above for specific issues"
+    echo ""
+    echo "2. Verify parameters are correct:"
+    echo "   KINESIS_STREAM_NAME='${KINESIS_STREAM_NAME}'"
+    echo "   KINESIS_STREAM_ARN='${KINESIS_STREAM_ARN}'"
+    echo ""
+    echo "3. Check CloudFormation events for detailed error:"
+    echo "   aws cloudformation describe-stack-events --stack-name ${STACK_NAME} --max-items 10"
+    echo ""
+    echo "4. To retry deployment, simply run this script again:"
+    echo "   ./scripts/deploy.sh"
+    echo ""
+    echo "5. Only run teardown if you want to delete everything:"
+    echo "   ./scripts/teardown.sh"
+    echo ""
     exit 1
 fi
