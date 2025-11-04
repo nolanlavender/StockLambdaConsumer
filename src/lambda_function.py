@@ -3,7 +3,7 @@ import base64
 import json
 import logging
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from config import get_config, Config
 from analytics import StockAnalytics
@@ -277,6 +277,7 @@ def lambda_handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:
     processed_count = 0
     failed_count = 0
     periodic_flush_count = 0
+    latencies = []  # Track processing latencies
 
     for record in event.get('Records', []):
         try:
@@ -286,7 +287,24 @@ def lambda_handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:
 
             # Process the record
             analytics = process_stock_record(stock_data)
-            if analytics:
+
+            # Calculate latency (from data timestamp to analytics complete)
+            if analytics and 'timestamp' in stock_data:
+                try:
+                    data_timestamp = datetime.fromisoformat(stock_data['timestamp'].replace('Z', '+00:00'))
+                    analytics_complete_time = datetime.now(timezone.utc)
+                    latency_ms = (analytics_complete_time - data_timestamp).total_seconds() * 1000
+                    latencies.append(latency_ms)
+
+                    # Log latency for this record
+                    symbol = stock_data.get('symbol', 'Unknown')
+                    logger.info(
+                        f"✓ {symbol} analytics complete in {latency_ms:.0f}ms "
+                        f"(signal: {analytics.get('trading_signal')})"
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not calculate latency: {e}")
+
                 analytics_batch.append(analytics)
                 processed_count += 1
 
@@ -294,11 +312,22 @@ def lambda_handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:
                 if should_flush_batch():
                     flush_result = flush_batch()
                     periodic_flush_count += 1
-                    logger.info(
-                        f"Periodic flush #{periodic_flush_count}: "
-                        f"{flush_result['success']} success, "
-                        f"{flush_result['failed']} failed"
-                    )
+
+                    # Log latency stats for this flush
+                    if latencies:
+                        avg_latency = sum(latencies) / len(latencies)
+                        logger.info(
+                            f"Periodic flush #{periodic_flush_count}: "
+                            f"{flush_result['success']} success, "
+                            f"{flush_result['failed']} failed, "
+                            f"avg latency={avg_latency:.0f}ms (n={len(latencies)})"
+                        )
+                    else:
+                        logger.info(
+                            f"Periodic flush #{periodic_flush_count}: "
+                            f"{flush_result['success']} success, "
+                            f"{flush_result['failed']} failed"
+                        )
 
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding JSON from Kinesis record: {e}")
@@ -316,6 +345,30 @@ def lambda_handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:
         logger.info(f"Final flush of {len(analytics_batch)} remaining analytics")
         final_flush_result = flush_batch()
 
+    # Calculate and log latency statistics
+    latency_stats = {}
+    if latencies:
+        latency_stats = {
+            'min_ms': round(min(latencies), 2),
+            'max_ms': round(max(latencies), 2),
+            'avg_ms': round(sum(latencies) / len(latencies), 2),
+            'count': len(latencies)
+        }
+
+        logger.info(
+            f"⏱️  Analytics Latency: "
+            f"avg={latency_stats['avg_ms']}ms, "
+            f"min={latency_stats['min_ms']}ms, "
+            f"max={latency_stats['max_ms']}ms "
+            f"(n={latency_stats['count']})"
+        )
+
+        # Warn if average latency is high
+        if latency_stats['avg_ms'] > 5000:  # > 5 seconds
+            logger.warning(
+                f"⚠️  High latency detected: {latency_stats['avg_ms']}ms average (data timestamp → analytics complete)"
+            )
+
     response = {
         'statusCode': 200,
         'body': json.dumps({
@@ -325,7 +378,8 @@ def lambda_handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:
             'periodic_flushes': periodic_flush_count,
             'batch_remaining': len(analytics_batch),
             'final_flush_success': final_flush_result['success'],
-            'final_flush_failed': final_flush_result['failed']
+            'final_flush_failed': final_flush_result['failed'],
+            'latency_stats': latency_stats
         })
     }
 

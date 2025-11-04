@@ -52,7 +52,7 @@ Parameters:
 
 Globals:
   Function:
-    Timeout: 60
+    Timeout: 300
     MemorySize: 512
     Runtime: python3.11
     Environment:
@@ -181,6 +181,7 @@ Resources:
               Action:
                 - lambda:GetFunctionConfiguration
                 - lambda:ListEventSourceMappings
+                - lambda:GetEventSourceMapping
                 - lambda:UpdateEventSourceMapping
               Resource: '*'
             - Effect: Allow
