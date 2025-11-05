@@ -1,5 +1,5 @@
 # Stock Lambda Consumer - ECS/Fargate Dockerfile
-FROM python:3.11-slim
+FROM public.ecr.aws/docker/library/python:3.11-slim
 
 # Set working directory
 WORKDIR /app
