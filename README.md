@@ -1,480 +1,335 @@
-# Stock Lambda Consumer
+# Stock ECS Consumer
 
-A real-time stock analytics processor that consumes from Kinesis Data Streams and generates actionable trading signals using advanced analytics.
+A **stateful, real-time stock analytics processor** that runs on **ECS/Fargate** with in-memory rolling windows for sub-second latency analytics.
 
-## Features
+## Overview
 
-- Real-time stock price analytics from Kinesis streams
-- Historical context loading (previous day's data for gap analysis)
-- Time-window based analytics (1min, 5min, 15min, 30min, 1hr, 2hr)
-- Moving averages and volatility calculations
-- Automated trading signals (BUY/HOLD/SELL)
-- Auto-shutdown when no data received or outside market hours
-- DynamoDB storage with 7-day TTL
-- Comprehensive logging and testing
-- Infrastructure as Code with AWS SAM
+This consumer processes stock price data from Kinesis Data Streams and generates comprehensive trading analytics using **in-memory rolling time windows**. Unlike serverless Lambda functions, this runs as a continuously-running container that maintains state across records, eliminating the need for DynamoDB queries on every record.
+
+## Key Features
+
+- **Stateful In-Memory Processing**: Maintains rolling windows in memory (no DB queries per record)
+- **Sub-Second Latency**: ~10ms per record vs ~1 second with Lambda
+- **State Persistence**: Saves/restores rolling windows to S3
+- **Market Hours Scheduling**: Automatically starts at 9:15 AM ET, stops at 4:15 PM ET
+- **Graceful Shutdown**: Saves state before container termination
+- **Comprehensive Analytics**: 40-66 fields per stock including momentum, volatility, MAs, and trading signals
 
 ## Architecture
 
 ```
-Kinesis Stream → Lambda Consumer → Analytics Engine
-                      ↓                    ↓
-                 DynamoDB ← Historical Data Loader
-                      ↓
-                 Trading Signals
+┌──────────────┐
+│   Kinesis    │
+│    Stream    │
+└──────┬───────┘
+       │ Continuous polling
+       ▼
+┌────────────────────────────────────┐
+│    ECS/Fargate Container           │
+│  ┌──────────────────────────────┐  │
+│  │   In-Memory Rolling Windows  │  │
+│  │  • 1min:  deque(~60 points)  │  │
+│  │  • 5min:  deque(~300 points) │  │
+│  │  • 15min: deque(~900 points) │  │
+│  │  • 30min: deque(~1800 points)│  │
+│  │  • 60min: deque(~3600 points)│  │
+│  │  • 120min:deque(~7200 points)│  │
+│  └──────────────────────────────┘  │
+│                                    │
+│  Per Record (~10ms):               │
+│   1. Add to deques                 │
+│   2. Evict old data                │
+│   3. Calculate analytics           │
+│   4. Batch write to DynamoDB       │
+└────────────┬───────────────────────┘
+             │
+             ├──────────► DynamoDB (Analytics Results)
+             │
+             └──────────► S3 (State Persistence)
 
-EventBridge (5min) → Monitor Lambda
-                      ↓
-                 Auto-enable/disable Consumer
+┌────────────────────────────────────┐
+│     EventBridge Scheduler          │
+│  • 9:15 AM ET: Set desired count=1│
+│  • 4:15 PM ET: Set desired count=0│
+│  (Monday-Friday only)              │
+└────────────────────────────────────┘
 ```
 
-## Analytics Generated
+## Why ECS over Lambda?
 
-### Price Metrics
-- Intraday change from open (%, absolute)
-- Gap analysis (vs previous day's close)
-- Price changes over multiple time windows
-- High/Low tracking per time period
-- Breakout/breakdown detection (vs previous day's levels)
-
-### Technical Indicators
-- Moving averages (5min, 15min, 30min, 1hr)
-- Volatility (standard deviation of returns)
-- Momentum (rate of change)
-- Price acceleration (velocity of momentum)
-
-### Trading Signals
-- **BUY**: Strong upward momentum + low volatility + price below MA
-- **SELL**: Downward momentum + high volatility + price above MA
-- **HOLD**: Stable price action within normal parameters
+| Aspect | Lambda (Old) | ECS/Fargate (New) |
+|--------|-------------|-------------------|
+| **State** | Stateless | Stateful (in-memory rolling windows) |
+| **DB Queries** | 6 queries per record | 0 queries per record |
+| **Latency** | ~1 second per record | ~10ms per record |
+| **Processing Model** | Event-driven batches | Continuous polling |
+| **Cost** | ~$10/month | ~$30/month |
+| **Startup** | Every 5 seconds | Once per day |
+| **Memory** | Lost between invocations | Persisted across records |
 
 ## Directory Structure
 
 ```
 StockLambdaConsumer/
 ├── src/                           # Source code
-│   ├── lambda_function.py         # Main Kinesis consumer
-│   ├── monitor.py                 # Auto-shutdown monitor
+│   ├── consumer_main.py           # Main ECS consumer (continuous polling)
+│   ├── rolling_windows.py         # In-memory rolling window data structures
+│   ├── state_persistence.py      # S3 state save/restore
 │   ├── analytics.py               # Analytics calculator
-│   ├── historical_data.py         # Historical data loader
+│   ├── historical_data.py         # DynamoDB historical data loader
 │   ├── dynamodb_writer.py         # DynamoDB writer
 │   ├── config.py                  # Configuration management
-│   └── market_hours.py            # Market hours checker
-├── scripts/                       # Utility scripts
-│   ├── deploy.sh                  # Deployment script
-│   ├── run_tests.sh               # Test runner
-│   ├── teardown.sh                # Cleanup script
-│   ├── query_analytics.sh         # Query DynamoDB
-│   └── monitor_logs.sh            # CloudWatch logs monitor
-├── configs/                       # Configuration files
-│   ├── config.example.json        # Example configuration
-│   └── .env.example               # Environment variables example
-├── tests/                         # Test suite
-│   ├── test_*.py                  # Test files
-│   └── test_config.json           # Test configuration
-├── template.yaml                  # AWS SAM template
-├── requirements.txt               # Python dependencies
-├── test_requirements.txt          # Test dependencies
+│   ├── market_hours.py            # Market hours checker
+│   └── requirements.txt           # Python dependencies
+├── scripts/                       # Deployment & monitoring scripts
+│   ├── deploy_ecs.sh              # Deploy ECS stack
+│   ├── build_and_push.sh          # Build & push Docker image
+│   ├── update_ecs_service.sh      # Update running service
+│   ├── view_ecs_logs.sh           # View CloudWatch logs
+│   ├── ecs_status.sh              # Check service status
+│   ├── query_analytics.sh         # Query DynamoDB results
+│   └── inspect_analytics.sh       # Detailed analytics inspection
+├── docs/                          # Documentation
+│   ├── ECS_MIGRATION_GUIDE.md     # Complete migration guide
+│   ├── DYNAMODB_SCHEMA.md         # DynamoDB schema documentation
+│   └── UPDATE_GUIDE.md            # Update procedures
+├── Dockerfile                     # Container definition
+├── template-ecs.yaml              # CloudFormation template (ECS/Fargate)
 └── README.md                      # This file
 ```
 
 ## Prerequisites
 
-1. **AWS CLI** - [Install Guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
-2. **SAM CLI** - [Install Guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
-3. **Python 3.11+**
-4. **Stock Lambda Producer** - Must be deployed first to create Kinesis stream
+1. **Docker** - For building container images
+2. **AWS CLI** - Configured with appropriate permissions
+3. **Stock Lambda Producer** - Must be deployed first to create Kinesis stream
 
 ## Quick Start
 
-### 1. Deploy the Producer (if not already done)
+### 1. Deploy Infrastructure
 
 ```bash
-cd ../StockLambdaProducer
-./scripts/deploy.sh
+cd /Users/nlavender/Documents/StockLambdaConsumer
+
+# Deploy ECS cluster, service, ECR repo, S3 bucket, etc.
+./scripts/deploy_ecs.sh
 ```
 
-### 2. Deploy the Consumer
+This creates:
+- ECS Cluster & Service
+- ECR Repository
+- S3 Bucket (state persistence)
+- VPC, Subnets, Security Groups
+- IAM Roles
+- EventBridge Schedulers (market hours)
+
+**Duration**: ~5 minutes
+
+### 2. Build and Push Docker Image
 
 ```bash
-cd StockLambdaConsumer
-
-# The deploy script will automatically fetch Kinesis stream info from producer
-./scripts/deploy.sh
+# Build image and push to ECR
+./scripts/build_and_push.sh
 ```
 
-### 3. Monitor the Application
+**Duration**: ~3 minutes
+
+### 3. Update ECS Service
 
 ```bash
-# Monitor processor logs
-./scripts/monitor_logs.sh processor
+# Force service to use new image
+./scripts/update_ecs_service.sh
+```
 
-# Monitor auto-shutdown logs
-./scripts/monitor_logs.sh monitor
+**Duration**: ~2 minutes
 
-# Query analytics for a symbol
-./scripts/query_analytics.sh AAPL 20
+### 4. Monitor
+
+```bash
+# View real-time logs
+./scripts/view_ecs_logs.sh
+
+# Check service status
+./scripts/ecs_status.sh
+
+# Query analytics
+./scripts/query_analytics.sh AAPL 10
 ```
 
 ## Configuration
 
-### Environment Variables
+### Environment Variables (in template-ecs.yaml)
 
-Set these before deployment to customize behavior:
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `KINESIS_STREAM_NAME` | Kinesis stream name | `stock-prices-stream` |
+| `DYNAMODB_TABLE_NAME` | DynamoDB table name | `stock-analytics` |
+| `DATA_RETENTION_DAYS` | TTL for DynamoDB records | `7` |
+| `ENFORCE_MARKET_HOURS` | Check market hours before processing | `true` |
+| `TEST_MODE` | Bypass market hours check | `false` |
+| `STATE_BUCKET` | S3 bucket for state persistence | Auto-created |
 
-```bash
-# Required (or auto-detected from producer stack)
-export KINESIS_STREAM_NAME=stock-prices-stream
-export KINESIS_STREAM_ARN=arn:aws:kinesis:...
+### Container Resources
 
-# Optional
-export STACK_NAME=stock-lambda-consumer
-export AWS_REGION=us-east-1
-export DYNAMODB_TABLE_NAME=stock-analytics
-export DATA_RETENTION_DAYS=7
-export ENFORCE_MARKET_HOURS=true
-export TEST_MODE=false
-export NO_DATA_TIMEOUT_MINUTES=10
-export CHECK_INTERVAL_MINUTES=5
+- **CPU**: 0.5 vCPU (configurable in template)
+- **Memory**: 1 GB (configurable in template)
+- **Network**: Fargate with public IP
 
-# Batch Write Configuration (prevents memory buildup)
-export BATCH_WRITE_INTERVAL_MINUTES=15  # Flush to DynamoDB every 15 minutes
-export BATCH_MAX_SIZE=500               # Force flush if batch reaches 500 items
-```
+## Market Hours Scheduling
 
-### Analytics Configuration
+The service automatically:
+- **Starts at 9:15 AM ET** (15 min before market open)
+- **Stops at 4:15 PM ET** (15 min after market close)
+- **Skips weekends automatically**
 
-Edit `configs/config.example.json`:
+Implemented via EventBridge Scheduler that sets ECS service desired count to 1 or 0.
 
-```json
-{
-  "analytics": {
-    "time_windows_minutes": [1, 5, 15, 30, 60, 120],
-    "moving_average_windows_minutes": [5, 15, 30, 60],
-    "volatility_threshold": 0.02,
-    "momentum_threshold": 0.015
-  },
-  "batch": {
-    "write_interval_minutes": 15,
-    "max_size": 500
-  }
-}
-```
+## State Persistence
 
-## Data Format
+### On Startup
+1. Container starts
+2. Loads rolling window state from S3 (if exists)
+3. Begins processing from Kinesis
 
-### Input (from Kinesis)
+### During Runtime
+- Saves state to S3 every 5 minutes
+- State includes all rolling windows for all symbols
 
-```json
-{
-  "symbol": "AAPL",
-  "price": 268.04,
-  "change": -2.33,
-  "change_percent": "-0.86",
-  "high": 270.85,
-  "low": 266.25,
-  "open": 269.7,
-  "previous_close": 270.37,
-  "timestamp": "2025-11-03T17:19:39.193597"
-}
-```
+### On Shutdown
+- Receives SIGTERM signal
+- Saves current state to S3 (compressed)
+- Flushes analytics batch to DynamoDB
+- Container exits gracefully
 
-### Output (to DynamoDB)
+## Analytics Generated
 
-Every stock record is enriched with **40-66 fields** of comprehensive analytics:
+Each stock record is enriched with **40-66 fields**:
 
-```json
-{
-  "symbol": "AAPL",
-  "timestamp": "2025-11-03T17:19:39.193597",
-  "date": "2025-11-03",
-  "current_price": 268.04,
+### Price Metrics
+- Intraday changes from open
+- Gap analysis vs previous day's close
+- High/Low tracking per time window
+- Breakout/breakdown detection
 
-  "change": -2.33,
-  "change_percent": "-0.86",
-  "high": 270.85,
-  "low": 266.25,
-  "open": 269.7,
-  "previous_close": 270.37,
+### Technical Indicators
+- Moving averages (5min, 15min, 30min, 1hr)
+- Volatility (standard deviation of returns, annualized)
+- Momentum (rate of change)
+- Price acceleration (momentum velocity)
 
-  "intraday_change_from_open": -1.66,
-  "intraday_change_from_open_percent": -0.62,
-  "gap": -0.67,
-  "gap_percent": -0.25,
-  "gap_type": "gap_down",
-
-  "change_5min": 1.04,
-  "change_5min_percent": 0.39,
-  "high_5min": 268.50,
-  "low_5min": 267.00,
-  "range_5min": 1.50,
-  "volume_5min": 12,
-
-  "change_15min": 1.54,
-  "change_15min_percent": 0.58,
-  "ma_5min": 267.51,
-  "ma_15min": 267.25,
-  "ma_30min": 268.10,
-  "ma_60min": 268.50,
-
-  "volatility": 0.0123,
-  "volatility_annualized": 0.1953,
-  "momentum": 0.0089,
-  "price_acceleration": 0.0012,
-
-  "trading_signal": "HOLD",
-  "signal_reason": "Stable price action within normal parameters",
-  "ttl": 1730923179
-}
-```
+### Trading Signals
+- **BUY**: Strong upward momentum + low volatility
+- **SELL**: Downward momentum + high volatility
+- **HOLD**: Stable price action within normal parameters
 
 **See [DynamoDB Schema Documentation](docs/DYNAMODB_SCHEMA.md) for complete field list.**
 
-## Batch Write Management
-
-To prevent memory buildup during long-running Lambda executions, the consumer implements intelligent batch flushing:
-
-### Automatic Flush Triggers
-
-1. **Time-Based Flush** (default: every 15 minutes):
-   - Periodically flushes analytics to DynamoDB
-   - Prevents memory accumulation during extended processing
-   - Configurable via `BATCH_WRITE_INTERVAL_MINUTES`
-
-2. **Size-Based Flush** (default: 500 items):
-   - Forces flush when batch reaches maximum size
-   - Safety mechanism for high-volume scenarios
-   - Configurable via `BATCH_MAX_SIZE`
-
-3. **End-of-Execution Flush**:
-   - Always flushes remaining items at end of Lambda invocation
-   - Ensures no data loss
-
-### Benefits
-
-- **Memory Efficiency**: Prevents Lambda from running out of memory
-- **Data Safety**: Ensures analytics are written regularly
-- **Flexibility**: Configurable based on your data volume
-- **Cost Optimization**: Batches writes for efficiency
-
-### Configuration Example
-
-```bash
-# For high-volume streams, flush more frequently
-export BATCH_WRITE_INTERVAL_MINUTES=5
-export BATCH_MAX_SIZE=250
-
-# For low-volume streams, batch more for efficiency
-export BATCH_WRITE_INTERVAL_MINUTES=30
-export BATCH_MAX_SIZE=1000
-```
-
-## Auto-Shutdown Mechanism
-
-The monitor Lambda runs every 5 minutes and:
-
-1. **Checks market hours** (if enforced):
-   - Disables consumer outside market hours
-   - Enables consumer during market hours
-
-2. **Checks data flow**:
-   - Disables consumer if no data received in 10+ minutes
-   - Prevents unnecessary Lambda invocations and costs
-
-3. **Respects test mode**:
-   - In test mode, consumer stays enabled regardless of market hours
-
-## Testing
-
-### Run Full Test Suite
-
-```bash
-./scripts/run_tests.sh
-```
-
-### Run Specific Tests
-
-```bash
-# Unit tests only
-pytest tests/ -m unit -v
-
-# Integration tests
-pytest tests/ -m integration -v
-
-# Specific test file
-pytest tests/test_analytics.py -v
-
-# With coverage
-pytest tests/ --cov=src --cov-report=html
-```
-
 ## Monitoring
 
-### CloudWatch Logs
+### View Logs
 
 ```bash
-# Processor logs
-aws logs tail /aws/lambda/StockAnalyticsProcessor --follow
+# Tail logs (follow mode)
+./scripts/view_ecs_logs.sh
 
-# Monitor logs
-aws logs tail /aws/lambda/StockAnalyticsMonitor --follow
+# View last 30 minutes
+./scripts/view_ecs_logs.sh 30m
+
+# View last 1 hour
+./scripts/view_ecs_logs.sh 1h
 ```
 
-### CloudWatch Alarms
+### Check Service Status
 
-The stack creates alarms for:
-- Processor errors (> 5 in 5 minutes)
-- Processor throttles (> 10 in 5 minutes)
+```bash
+./scripts/ecs_status.sh
+```
 
-### DynamoDB Queries
+Shows:
+- Service status (ACTIVE, DRAINING, INACTIVE)
+- Desired vs Running task count
+- Recent service events
+- Task details (CPU, memory, status)
+
+### Query Analytics
 
 ```bash
 # Query latest analytics for AAPL
-aws dynamodb query \
-    --table-name stock-analytics \
-    --key-condition-expression "symbol = :s" \
-    --expression-attribute-values '{":s":{"S":"AAPL"}}' \
-    --scan-index-forward false \
-    --limit 10
+./scripts/query_analytics.sh AAPL 20
 
-# Query by date (using GSI)
-aws dynamodb query \
-    --table-name stock-analytics \
-    --index-name DateIndex \
-    --key-condition-expression "symbol = :s AND #d = :date" \
-    --expression-attribute-names '{"#d":"date"}' \
-    --expression-attribute-values '{":s":{"S":"AAPL"},":date":{"S":"2025-11-03"}}'
+# Detailed inspection
+./scripts/inspect_analytics.sh AAPL
 ```
 
-## Historical Context Feature
+## Updating Code
 
-The application loads previous day's data on startup to provide better analytics:
+After making code changes:
 
-- **Gap Analysis**: Compares today's open vs yesterday's close
-- **Breakout Detection**: Identifies when price breaks yesterday's high/low
-- **Better Baselines**: More meaningful comparisons for trading signals
+```bash
+# 1. Build and push new image
+./scripts/build_and_push.sh
 
-## Cost Optimization
+# 2. Force ECS to deploy new image
+./scripts/update_ecs_service.sh
 
-- **Auto-shutdown**: Stops processing when no data or outside market hours
-- **DynamoDB TTL**: Automatically deletes data after 7 days
-- **Batch Processing**: Processes up to 100 Kinesis records at once
-- **On-demand Billing**: DynamoDB scales automatically
-
-Estimated monthly cost (for 8 symbols, 5-second intervals, market hours only):
-- Lambda: ~$5-10
-- DynamoDB: ~$5-15
-- Kinesis: Covered by producer stack
-- Total: ~$10-25/month
+# 3. Monitor deployment
+./scripts/ecs_status.sh
+```
 
 ## Troubleshooting
 
-### No Data in DynamoDB
+### Container Won't Start
 
-1. Check Kinesis event source mapping status:
-   ```bash
-   aws lambda list-event-source-mappings \
-       --function-name StockAnalyticsProcessor
-   ```
+1. Check task logs: `./scripts/view_ecs_logs.sh`
+2. Verify ECR image exists
+3. Check IAM permissions on task role
+4. Verify environment variables in task definition
 
-2. Check processor logs:
-   ```bash
-   ./scripts/monitor_logs.sh processor
-   ```
+### No Data Processing
 
-3. Verify producer is running:
-   ```bash
-   aws stepfunctions list-executions \
-       --state-machine-arn <producer-state-machine-arn>
-   ```
+1. Check Kinesis stream has data
+2. Verify container is running: `./scripts/ecs_status.sh`
+3. Check market hours (or set TEST_MODE=true)
+4. View logs for errors: `./scripts/view_ecs_logs.sh`
 
-### Consumer Keeps Disabling
+### High Memory Usage
 
-1. Check monitor logs:
-   ```bash
-   ./scripts/monitor_logs.sh monitor
-   ```
+1. Check rolling window sizes in logs (look for "Stats:" lines)
+2. Reduce time window sizes in config
+3. Increase container memory in template-ecs.yaml
 
-2. Verify market hours or enable test mode:
-   ```bash
-   export TEST_MODE=true
-   ./scripts/deploy.sh
-   ```
+### State Not Persisting
 
-### Lambda Errors
+1. Check S3 bucket exists and has files
+2. Verify task role has S3 permissions
+3. Check logs for save/load errors
 
-1. Check function logs for stack traces
-2. Verify IAM permissions
-3. Check DynamoDB table exists
-4. Verify Kinesis stream ARN is correct
+## Cost Estimate
 
-## Cleanup
+**Monthly costs** (7 hours/day, 5 days/week):
 
-To remove all resources:
+- **Fargate**: ~$25-30 (0.5 vCPU, 1GB memory)
+- **DynamoDB**: ~$5-10 (on-demand)
+- **S3**: <$1 (state files, compressed)
+- **CloudWatch Logs**: ~$2-5
+- **Total**: ~$30-45/month
 
-```bash
-./scripts/teardown.sh
-```
-
-This will delete:
-- Lambda functions
-- DynamoDB table and all data
-- CloudWatch log groups
-- IAM roles and policies
-- Event source mappings
-
-## Advanced Usage
-
-### Custom Analytics Thresholds
-
-Modify trading signal thresholds:
-
-```python
-# In src/analytics.py
-analytics = StockAnalytics(
-    volatility_threshold=0.03,  # Higher threshold = less sensitive
-    momentum_threshold=0.02     # Higher threshold = stronger signals needed
-)
-```
-
-### Extend Time Windows
-
-Add custom time windows:
-
-```bash
-export TIME_WINDOWS_MINUTES=1,5,15,30,60,120,240
-export MOVING_AVERAGE_WINDOWS_MINUTES=5,15,30,60,120
-./scripts/deploy.sh
-```
-
-### Query Patterns
-
-```bash
-# Get all BUY signals for a symbol
-aws dynamodb query \
-    --table-name stock-analytics \
-    --key-condition-expression "symbol = :s" \
-    --filter-expression "trading_signal = :signal" \
-    --expression-attribute-values '{":s":{"S":"AAPL"},":signal":{"S":"BUY"}}'
-```
+Compare to Lambda: ~$10/month (but with 100x slower processing)
 
 ## Security
 
-- All AWS resources use least-privilege IAM roles
-- DynamoDB encryption at rest enabled by default
-- Point-in-time recovery enabled for DynamoDB
-- No sensitive data logged
+- Least-privilege IAM roles
+- DynamoDB encryption at rest
+- Point-in-time recovery enabled
+- S3 bucket encryption
+- Private container (no public access)
+- Security group limits egress
 
-## Contributing
+## Complete Documentation
 
-1. Run tests before committing: `./scripts/run_tests.sh`
-2. Follow existing code style
-3. Add tests for new features
-4. Update documentation
-
-## License
-
-MIT License - see LICENSE file for details.
+- **[ECS Migration Guide](docs/ECS_MIGRATION_GUIDE.md)** - Complete migration documentation
+- **[DynamoDB Schema](docs/DYNAMODB_SCHEMA.md)** - All 66 analytics fields
+- **[Update Guide](docs/UPDATE_GUIDE.md)** - How to update without downtime
 
 ## Related Projects
 
@@ -482,8 +337,12 @@ MIT License - see LICENSE file for details.
 
 ## Support
 
-For issues or questions:
-1. Check CloudWatch logs
-2. Review troubleshooting section
-3. Check AWS SAM documentation
-4. Review code comments and docstrings
+For issues:
+1. Check CloudWatch logs: `./scripts/view_ecs_logs.sh`
+2. Check service status: `./scripts/ecs_status.sh`
+3. Review [ECS_MIGRATION_GUIDE.md](docs/ECS_MIGRATION_GUIDE.md)
+4. Check CloudFormation events in AWS Console
+
+## License
+
+MIT License - see LICENSE file for details.
