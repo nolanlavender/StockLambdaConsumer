@@ -1,5 +1,4 @@
 """Continuous Kinesis consumer for ECS/Fargate deployment."""
-import base64
 import json
 import logging
 import os
@@ -39,7 +38,7 @@ kinesis_client: Optional[Any] = None
 shutdown_requested = False
 
 
-def signal_handler(signum, frame):
+def signal_handler(signum, _frame):
     """Handle shutdown signals gracefully."""
     global shutdown_requested
     logger.info(f"Received signal {signum}, initiating graceful shutdown...")
@@ -115,6 +114,8 @@ def load_historical_context(symbol: str) -> Dict[str, Any]:
     Returns:
         Dictionary with historical context
     """
+    assert config is not None
+
     historical_loader = HistoricalDataLoader(
         table_name=config.dynamodb_table_name,
         region=config.aws_region
@@ -177,6 +178,8 @@ def get_shard_iterator(stream_name: str, shard_id: str) -> Optional[str]:
     Returns:
         Shard iterator or None if error
     """
+    assert kinesis_client is not None
+
     try:
         response = kinesis_client.get_shard_iterator(
             StreamName=stream_name,
@@ -196,6 +199,14 @@ def process_kinesis_records(stream_name: str):
     Args:
         stream_name: Kinesis stream name
     """
+    # Assert globals are initialized (helps type checker)
+    assert config is not None
+    assert dynamodb_writer is not None
+    assert rolling_store is not None
+    assert market_hours is not None
+    assert kinesis_client is not None
+    assert state_persistence is not None
+
     logger.info(f"Starting to poll Kinesis stream: {stream_name}")
 
     # Get list of shards
