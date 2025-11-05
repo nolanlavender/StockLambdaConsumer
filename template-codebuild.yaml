@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CodeBuild project for building Stock ECS Consumer Docker image'
+
+Parameters:
+  GitHubRepoUrl:
+    Type: String
+    Default: 'NONE'
+    Description: Optional GitHub repository URL (leave as NONE to use local source)
+
+  ECRRepositoryName:
+    Type: String
+    Default: stock-ecs-consumer-consumer
+    Description: Name of the ECR repository
+
+Resources:
+  # S3 Bucket for CodeBuild source code
+  CodeBuildSourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-codebuild-source-${AWS::AccountId}'
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldSources
+            Status: Enabled
+            ExpirationInDays: 7
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Application
+          Value: StockECSConsumer
+
+  # IAM Role for CodeBuild
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub '${CodeBuildSourceBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+      Tags:
+        - Key: Application
+          Value: StockECSConsumer
+
+  # CodeBuild Project
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-builder'
+      Description: Builds Docker image for Stock ECS Consumer
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref ECRRepositoryName
+      Source:
+        Type: S3
+        Location: !Sub '${CodeBuildSourceBucket}/${AWS::StackName}-source.zip'
+        BuildSpec: buildspec.yml
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+          - LOCAL_SOURCE_CACHE
+      TimeoutInMinutes: 20
+      Tags:
+        - Key: Application
+          Value: StockECSConsumer
+
+  # CloudWatch Log Group for CodeBuild
+  CodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/codebuild/${AWS::StackName}-builder'
+      RetentionInDays: 7
+
+Outputs:
+  CodeBuildProjectName:
+    Description: CodeBuild Project Name
+    Value: !Ref CodeBuildProject
+    Export:
+      Name: !Sub '${AWS::StackName}-CodeBuildProject'
+
+  CodeBuildProjectArn:
+    Description: CodeBuild Project ARN
+    Value: !GetAtt CodeBuildProject.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CodeBuildArn'
+
+  SourceBucketName:
+    Description: S3 Bucket for source code
+    Value: !Ref CodeBuildSourceBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-SourceBucket'

@@ -119,9 +119,9 @@ This guide covers the migration from **Lambda (stateless, event-driven)** to **E
 ## Deployment Guide
 
 ### Prerequisites
-1. **Docker** installed locally
-2. **AWS CLI** configured with appropriate permissions
-3. **StockLambdaProducer** stack deployed (for Kinesis stream)
+1. **AWS CLI** configured with appropriate permissions
+2. **StockLambdaProducer** stack deployed (for Kinesis stream)
+3. **Docker** (optional - can use AWS CodeBuild if not available locally)
 
 ### Step 1: Deploy Infrastructure
 
@@ -145,6 +145,12 @@ This creates:
 
 ### Step 2: Build and Push Docker Image
 
+You have two options depending on whether you have Docker installed locally:
+
+#### Option A: Local Docker Build (Fastest)
+
+If you have Docker installed:
+
 ```bash
 # Build Docker image and push to ECR
 ./scripts/build_and_push.sh
@@ -156,7 +162,30 @@ This:
 - Tags image with `:latest` and `:YYYYMMDD-HHMMSS`
 - Pushes both tags to ECR
 
-**Expected Duration**: ~3 minutes
+**Expected Duration**: ~2-3 minutes
+
+#### Option B: AWS CodeBuild (No Docker Required)
+
+If you don't have Docker installed or have machine restrictions:
+
+```bash
+# Build Docker image using AWS CodeBuild
+./scripts/build_with_codebuild.sh
+```
+
+This:
+1. Deploys CodeBuild infrastructure (first time only)
+2. Packages source code as zip
+3. Uploads to S3
+4. Triggers CodeBuild to build Docker image
+5. Pushes image to ECR
+
+**Expected Duration**: ~5-7 minutes (includes CodeBuild infrastructure setup on first run)
+
+**Note**: CodeBuild uses AWS resources (no local Docker needed) and creates:
+- S3 bucket for source uploads
+- CodeBuild project for building images
+- CloudWatch logs for build output
 
 ### Step 3: Update ECS Service
 
@@ -234,7 +263,10 @@ After making code changes:
 
 ```bash
 # 1. Build and push new image
+# Option A: Local Docker
 ./scripts/build_and_push.sh
+# OR Option B: CodeBuild (no Docker)
+./scripts/build_with_codebuild.sh
 
 # 2. Force ECS to deploy new image
 ./scripts/update_ecs_service.sh
@@ -320,6 +352,30 @@ aws s3 ls s3://stock-ecs-consumer-state-{ACCOUNT_ID}/state/rolling-windows/
 - S3 permissions: Check task role has `s3:PutObject` permission
 - Shutdown too fast: Container needs time to save state on SIGTERM
 
+### CodeBuild Issues
+
+**Check CodeBuild logs**:
+```bash
+# Get project name
+CODEBUILD_PROJECT=$(aws cloudformation describe-stacks \
+    --stack-name stock-ecs-consumer-codebuild \
+    --query "Stacks[0].Outputs[?OutputKey=='CodeBuildProjectName'].OutputValue" \
+    --output text)
+
+# View recent logs
+aws logs tail /aws/codebuild/${CODEBUILD_PROJECT} --since 10m --follow
+```
+
+**Common issues**:
+- ECR login fails: Check CodeBuild role has `ecr:GetAuthorizationToken` permission
+- Source not found: Verify source zip uploaded to S3 successfully
+- Build timeout: Default is 20 minutes, check `template-codebuild.yaml` if builds take longer
+
+**View build history in console**:
+```
+https://console.aws.amazon.com/codesuite/codebuild/projects/stock-ecs-consumer-codebuild-builder/history
+```
+
 ## Configuration
 
 ### Environment Variables (in template-ecs.yaml)
@@ -371,14 +427,21 @@ cd /Users/nlavender/Documents/StockLambdaConsumer
 
 ### Infrastructure
 - `template-ecs.yaml`: CloudFormation template for ECS/Fargate
+- `template-codebuild.yaml`: CloudFormation template for CodeBuild (optional, for Docker-less builds)
 - `Dockerfile`: Container image definition
+- `buildspec.yml`: CodeBuild build specification
 
 ### Scripts
-- `scripts/deploy_ecs.sh`: Deploy CloudFormation stack
-- `scripts/build_and_push.sh`: Build and push Docker image to ECR
+- `scripts/deploy_ecs.sh`: Deploy ECS CloudFormation stack
+- `scripts/build_and_push.sh`: Build and push Docker image to ECR (requires local Docker)
+- `scripts/build_with_codebuild.sh`: Build Docker image using AWS CodeBuild (no local Docker needed)
 - `scripts/update_ecs_service.sh`: Force ECS service to deploy new image
 - `scripts/view_ecs_logs.sh`: View CloudWatch logs
 - `scripts/ecs_status.sh`: Check service and task status
+- `scripts/start_service.sh`: Manually start ECS service
+- `scripts/stop_service.sh`: Manually stop ECS service
+- `scripts/deploy_all.sh`: One-command deployment (infrastructure + build + update)
+- `scripts/teardown.sh`: Safely delete all resources
 
 ## Support
 

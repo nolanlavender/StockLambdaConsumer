@@ -244,12 +244,49 @@ def process_kinesis_records(stream_name: str):
                 logger.info(f"Received {len(records)} records from Kinesis")
 
                 for record in records:
-                    # Decode data
-                    payload = base64.b64decode(record['Data'])
-                    stock_data = json.loads(payload)
+                    # Decode data - handle both direct bytes and base64-encoded formats
+                    data = record['Data']
+
+                    # boto3 returns bytes, try to decode as JSON directly first
+                    try:
+                        stock_data = json.loads(data)
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        # If direct decode fails, data might be in unexpected format
+                        # Try decoding as UTF-8 string first
+                        try:
+                            if isinstance(data, bytes):
+                                data_str = data.decode('utf-8')
+                                stock_data = json.loads(data_str)
+                            else:
+                                # If it's already a string, just parse it
+                                stock_data = json.loads(data)
+                        except Exception as decode_error:
+                            logger.error(f"Failed to decode record data. Type: {type(data)}, First 100 bytes: {repr(data[:100] if len(data) > 100 else data)}")
+                            raise decode_error
+
+                    # Track latency from record timestamp to analytics completion
+                    record_timestamp_str = stock_data.get('timestamp')
+                    if record_timestamp_str:
+                        try:
+                            record_timestamp = datetime.fromisoformat(record_timestamp_str.replace('Z', '+00:00'))
+                            analytics_start = datetime.now(record_timestamp.tzinfo or None)
+                        except Exception:
+                            record_timestamp = None
+                            analytics_start = None
+                    else:
+                        record_timestamp = None
+                        analytics_start = None
 
                     # Process record
                     analytics = process_record(stock_data)
+
+                    # Calculate and log latency (excluding DynamoDB write time)
+                    if analytics and record_timestamp and analytics_start:
+                        analytics_end = datetime.now(record_timestamp.tzinfo or None)
+                        latency_ms = (analytics_end - record_timestamp).total_seconds() * 1000
+                        # Log latency every 50 records to avoid log spam
+                        if records_processed % 50 == 0:
+                            logger.info(f"Latency (record timestamp → analytics complete): {latency_ms:.2f}ms for {stock_data.get('symbol', 'Unknown')}")
 
                     if analytics:
                         analytics_batch.append(analytics)
