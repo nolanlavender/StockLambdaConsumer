@@ -439,7 +439,7 @@ Resources:
       Description: Stop consumer 15 minutes after market close (4:15 PM ET)
       FlexibleTimeWindow:
         Mode: 'OFF'
-      ScheduleExpression: 'cron(15 20 ? * MON-FRI *)'  # 4:15 PM ET = 8:15 PM UTC (adjusted for EST)
+      ScheduleExpression: 'cron(15 16 ? * MON-FRI *)'  # 4:15 PM ET
       ScheduleExpressionTimezone: America/New_York
       Target:
         Arn: !Sub 'arn:aws:scheduler:::aws-sdk:ecs:updateService'
