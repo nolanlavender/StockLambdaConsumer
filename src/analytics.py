@@ -163,7 +163,7 @@ class StockAnalytics:
             if not data_points:
                 continue
 
-            prices = [float(dp.get('current_price', 0)) for dp in data_points if 'current_price' in dp]
+            prices = [float(dp.get('price', 0)) for dp in data_points if 'price' in dp]
             if not prices:
                 continue
 
@@ -197,7 +197,7 @@ class StockAnalytics:
             if ma_window in time_window_data:
                 data_points = time_window_data[ma_window]
                 if data_points:
-                    prices = [float(dp.get('current_price', 0)) for dp in data_points if 'current_price' in dp]
+                    prices = [float(dp.get('price', 0)) for dp in data_points if 'price' in dp]
                     if prices:
                         ma_analytics[f'ma_{ma_window}min'] = statistics.mean(prices)
 
@@ -225,7 +225,7 @@ class StockAnalytics:
         if len(data_points) < 2:
             return metrics
 
-        prices = [float(dp.get('current_price', 0)) for dp in data_points if 'current_price' in dp]
+        prices = [float(dp.get('price', 0)) for dp in data_points if 'price' in dp]
         if len(prices) < 2:
             return metrics
 

@@ -164,6 +164,15 @@ def process_record(record_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         previous_day_summary=previous_day_summary
     )
 
+    # Debug: Log field count to track when full analytics are available
+    if len(analytics) > 20:  # Expected to have 30+ fields when windows are full
+        logger.debug(f"Full analytics calculated for {symbol}: {len(analytics)} fields")
+    elif len(analytics) < 20:
+        logger.debug(
+            f"Limited analytics for {symbol}: {len(analytics)} fields - "
+            f"Windows: {', '.join([f'{k}:{len(v)}pts' for k, v in time_window_data.items() if v])}"
+        )
+
     return analytics
 
 
