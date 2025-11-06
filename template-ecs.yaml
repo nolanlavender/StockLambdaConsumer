@@ -419,7 +419,7 @@ Resources:
       Description: Start consumer 15 minutes before market open (9:15 AM ET)
       FlexibleTimeWindow:
         Mode: 'OFF'
-      ScheduleExpression: 'cron(15 9 ? * MON-FRI *)'  # 9:15 AM ET
+      ScheduleExpression: 'cron(15 9 ? * 2-6 *)'  # 9:15 AM ET, Mon-Fri (2-6)
       ScheduleExpressionTimezone: America/New_York
       Target:
         Arn: !Sub 'arn:aws:scheduler:::aws-sdk:ecs:updateService'
@@ -439,7 +439,7 @@ Resources:
       Description: Stop consumer 15 minutes after market close (4:15 PM ET)
       FlexibleTimeWindow:
         Mode: 'OFF'
-      ScheduleExpression: 'cron(15 16 ? * MON-FRI *)'  # 4:15 PM ET
+      ScheduleExpression: 'cron(15 16 ? * 2-6 *)'  # 4:15 PM ET, Mon-Fri (2-6)
       ScheduleExpressionTimezone: America/New_York
       Target:
         Arn: !Sub 'arn:aws:scheduler:::aws-sdk:ecs:updateService'
