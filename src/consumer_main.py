@@ -366,6 +366,18 @@ def process_kinesis_records(stream_name: str):
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received")
             break
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', '')
+            if error_code == 'ExpiredIteratorException':
+                logger.warning("Shard iterator expired, getting new iterator...")
+                shard_iterator = get_shard_iterator(stream_name, shard_id)
+                if not shard_iterator:
+                    logger.error("Failed to get new shard iterator")
+                    time.sleep(5)
+                continue
+            else:
+                logger.error(f"AWS error processing records: {e}", exc_info=True)
+                time.sleep(5)
         except Exception as e:
             logger.error(f"Error processing records: {e}", exc_info=True)
             time.sleep(5)  # Brief pause on error
